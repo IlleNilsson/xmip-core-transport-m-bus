@@ -157,6 +157,25 @@ impl Frame {
     pub const fn after_long_header(length: u8) -> usize {
         length as usize + 2
     }
+
+    /// How long the frame opening `read` is, once its first bytes say:
+    /// the rule a serial line reads M-Bus by, since M-Bus delimits nothing
+    /// ([`serial::Framing::Measured`]).
+    ///
+    /// # Errors
+    /// A first byte that opens no M-Bus frame.
+    pub fn measure(read: &[u8]) -> Result<Option<usize>> {
+        let Some(first) = read.first() else {
+            return Ok(None);
+        };
+        let after = Self::after_start(*first)?;
+        if *first != LONG {
+            return Ok(Some(1 + after));
+        }
+        Ok(read
+            .get(1)
+            .map(|length| 4 + Self::after_long_header(*length)))
+    }
 }
 
 /// The arithmetic checksum: the sum modulo 256.
