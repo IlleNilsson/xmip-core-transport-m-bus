@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use sdk::serial::{Bus, Device};
 use transport::error::Result;
+use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::{Arrived, Transport};
 
@@ -96,29 +97,14 @@ impl MBusTransport {
     }
 }
 
-/// The meter on the bus, holding what the master wrote until it is read
-/// back.
-struct Holding {
-    master: MBusTransport,
-    address: String,
-}
-
-impl FarEnd for Holding {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        self.master.read_stream()
-    }
-}
-
 impl Loopback for MBusTransport {
+    /// The meter on the bus, holding what the master wrote until it is read
+    /// back.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        Ok(Box::new(Holding {
-            master: self.clone(),
-            address: self.origin(self.address),
-        }))
+        let master = self.clone();
+        Ok(Box::new(Held::new(self.origin(self.address), move || {
+            master.read_stream()
+        })))
     }
 
     /// A fresh master on the same bus writes to the meter at `address`.
