@@ -13,11 +13,13 @@
 //! Receive Location reads the one a meter holds. There is no ceiling: a
 //! Stream is as long as its telegrams.
 //!
-//! The carrier is [`serial`](serial): the line is a [`Line`], and the
-//! serial technology is one — a port on a deployment, its in-memory
-//! loopback line in tests. A loopback meter answers on that line, so a
-//! master and a meter round-trip in process with no level converter,
-//! which is what [`MBusTransport::loopback`] stands up (ADR-0051).
+//! The carrier is a [`Line`]: a serial port on a deployment, framed by
+//! [`Frame::measure`], or the serial technology's multi-drop bus in
+//! process, with meters on it at their own addresses. A master and a meter
+//! round-trip on that bus with no level converter, which is what
+//! [`MBusTransport::loopback`] stands up (ADR-0051); more meters on one bus
+//! show what the wire is for — the one addressed answers, the rest keep
+//! silent (open problem 24).
 //! Wireless M-Bus frames the same records and the same meter over the air
 //! and rides on this crate for them.
 //!
@@ -33,8 +35,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serial::{Framing, SerialTransport};
 use transport::error::{Result, protocol_error};
+use transport::line::Line;
 use transport::{Arrived, Directions, Transport};
 
 pub use frame::Frame;
@@ -46,65 +48,6 @@ use crate::record::{CI_DATA_SEND, CI_VARIABLE_LONG};
 /// The room a wired answer leaves for records: a long frame's user data
 /// less the long header.
 pub const ANSWER_ROOM: usize = MAX_USER_DATA - 12;
-
-/// Where frames go and come from.
-pub trait Line: Send + Sync {
-    /// The line's name, for the origin URI.
-    fn name(&self) -> String;
-    /// Put a frame on the line.
-    ///
-    /// # Errors
-    /// Where the line refused it.
-    fn transmit(&self, frame: &[u8]) -> Result<()>;
-    /// The next frame, or `None` when nothing arrived within `timeout`.
-    ///
-    /// # Errors
-    /// Where the line could not be read or carried what opens no frame.
-    fn receive(&self, timeout: Duration) -> Result<Option<Vec<u8>>>;
-}
-
-/// A serial port is a line: frames are read by their own length, since
-/// M-Bus delimits nothing.
-impl Line for SerialTransport {
-    fn name(&self) -> String {
-        let origin = self.origin();
-        origin
-            .strip_prefix("serial://")
-            .and_then(|rest| rest.split('?').next())
-            .unwrap_or(&origin)
-            .to_string()
-    }
-
-    fn transmit(&self, frame: &[u8]) -> Result<()> {
-        self.clone()
-            .framed(Framing::Fixed(frame.len()))
-            .send("", frame)
-    }
-
-    fn receive(&self, _timeout: Duration) -> Result<Option<Vec<u8>>> {
-        let Ok(mut bytes) = exactly(self, 1) else {
-            return Ok(None);
-        };
-        let after = Frame::after_start(bytes[0])?;
-        bytes.extend(exactly(self, after)?);
-        if bytes[0] == frame::LONG {
-            bytes.extend(exactly(self, Frame::after_long_header(bytes[1]))?);
-        }
-        Ok(Some(bytes))
-    }
-}
-
-/// `count` bytes off the port, none consumed unless all are there.
-fn exactly(port: &SerialTransport, count: usize) -> Result<Vec<u8>> {
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    Transport::receive(&port.clone().framed(Framing::Fixed(count)))?
-        .into_iter()
-        .next()
-        .map(|arrived| arrived.bytes)
-        .ok_or_else(|| protocol_error("the line gave no frame"))
-}
 
 /// The master's side of a line.
 #[derive(Clone)]
@@ -268,11 +211,18 @@ impl Transport for MBusTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial::{Framing, SerialTransport};
     use transport::loopback::LOOPBACK_TIMEOUT;
+
+    /// A serial loopback wire read as M-Bus reads a port: by the length
+    /// the frame opens with.
+    fn port() -> SerialTransport {
+        SerialTransport::loopback().framed(Framing::Measured(Frame::measure))
+    }
 
     #[test]
     fn a_serial_port_is_a_line_that_reads_frames_by_their_own_length() {
-        let port = SerialTransport::loopback();
+        let port = port();
         assert_eq!(Line::name(&port), "loopback");
         assert!(
             Line::receive(&port, LOOPBACK_TIMEOUT)
@@ -303,14 +253,19 @@ mod tests {
             Line::receive(&port, LOOPBACK_TIMEOUT).is_err(),
             "opens no frame"
         );
+    }
+
+    #[test]
+    fn a_frame_cut_short_is_an_error_not_silence() {
+        let port = port();
         Line::transmit(&port, &[0x10, 0x40]).expect("half a frame");
         assert!(Line::receive(&port, LOOPBACK_TIMEOUT).is_err(), "cut short");
     }
 
     #[test]
     fn a_master_names_itself_and_takes_an_address_from_the_target() {
-        let master = MBusTransport::new(Arc::new(SerialTransport::loopback()), 1)
-            .timing_out_after(Duration::from_millis(10));
+        let master =
+            MBusTransport::new(Arc::new(port()), 1).timing_out_after(Duration::from_millis(10));
         assert_eq!(master.name(), "m-bus");
         assert!(master.claims().is_none());
         assert!(master.directions().receives() && master.directions().sends());
