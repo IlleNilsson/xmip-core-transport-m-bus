@@ -160,7 +160,7 @@ impl Frame {
 
     /// How long the frame opening `read` is, once its first bytes say:
     /// the rule a serial line reads M-Bus by, since M-Bus delimits nothing
-    /// ([`serial::Framing::Measured`]).
+    /// (the serial technology's `Framing::Measured`).
     ///
     /// # Errors
     /// A first byte that opens no M-Bus frame.

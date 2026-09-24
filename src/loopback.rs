@@ -1,7 +1,7 @@
 //! Meters on the serial technology's multi-drop bus, and both ends of one
 //! M-Bus exchange on it (ADR-0051).
 //!
-//! [`OnTheBus`] is a meter as a device on [`serial::bus::Bus`]: it hears
+//! [`OnTheBus`] is a meter as a device on the SDK's [`Bus`]: it hears
 //! every frame the master puts on the bus and answers the ones addressed to
 //! it — its primary address, or the broadcast — as a meter on a real pair of
 //! wires does; every other meter on the bus keeps silent. The loopback pair
@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use serial::bus::{Bus, Device};
+use sdk::serial::{Bus, Device};
 use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::{Arrived, Transport};
