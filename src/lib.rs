@@ -35,9 +35,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use serial::{Framing, SerialTransport};
+use transport::Configured;
 use transport::error::{Result, protocol_error};
 use transport::line::Line;
 use transport::{Arrived, Directions, Transport};
+use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 pub use frame::Frame;
 pub use meter::{Identity, Meter};
@@ -48,6 +51,10 @@ use crate::record::{CI_DATA_SEND, CI_VARIABLE_LONG};
 /// The room a wired answer leaves for records: a long frame's user data
 /// less the long header.
 pub const ANSWER_ROOM: usize = MAX_USER_DATA - 12;
+
+/// The rate a meter answers at unless its Location says another: 2400
+/// baud, the one EN 13757-2 meters are delivered speaking.
+pub const BAUD: u32 = 2400;
 
 /// The master's side of a line.
 #[derive(Clone)]
@@ -171,6 +178,56 @@ impl MBusTransport {
     }
 }
 
+impl Configured for MBusTransport {
+    /// The address is the serial port the line is on, `/dev/ttyUSB0` or
+    /// `COM3`; the settings are the meter on it and the line's rate.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "meter",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 250,
+                },
+                presence: Presence::Required,
+                meaning: "The meter's primary address, written to unless a target names one.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "baud",
+                kind: Kind::Integer {
+                    minimum: 300,
+                    maximum: 38_400,
+                },
+                presence: Presence::Default(Fixed::Integer(BAUD as i64)),
+                meaning: "The rate the line runs at, in baud.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long a meter that does not answer is waited for.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        // The declaration holds both integers within their ranges.
+        let baud = u32::try_from(settings.integer("baud")).unwrap_or(BAUD);
+        let meter = u8::try_from(settings.integer("meter")).unwrap_or(0);
+        let port = SerialTransport::new(address, baud).framed(Framing::Measured(Frame::measure));
+        Ok(match settings.optional_duration("timeout") {
+            Some(timeout) => {
+                Self::new(Arc::new(port.timing_out_after(timeout)), meter).timing_out_after(timeout)
+            }
+            None => Self::new(Arc::new(port), meter),
+        })
+    }
+}
+
 fn acknowledged(answer: &Frame) -> Result<()> {
     if *answer == Frame::Ack {
         Ok(())
@@ -211,13 +268,31 @@ impl Transport for MBusTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial::{Framing, SerialTransport};
     use transport::loopback::LOOPBACK_TIMEOUT;
 
     /// A serial loopback wire read as M-Bus reads a port: by the length
     /// the frame opens with.
     fn port() -> SerialTransport {
         SerialTransport::loopback().framed(Framing::Measured(Frame::measure))
+    }
+
+    #[test]
+    fn m_bus_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert!(MBusTransport::SETTINGS.problems().is_empty());
+        let given = [
+            ("meter".to_string(), Given::Integer(7)),
+            ("timeout".to_string(), Given::Text("2s".to_string())),
+        ];
+        let built = MBusTransport::open("/dev/ttyUSB0", Applies::Receive, &given).expect("built");
+        assert_eq!(built.line.name(), "/dev/ttyUSB0");
+        assert_eq!(built.address, 7);
+        assert_eq!(built.timeout, Duration::from_secs(2));
+        assert_eq!(built.origin(7), "mbus:///dev/ttyUSB0/7");
+        let Err(refused) = MBusTransport::open("COM3", Applies::Send, &given[1..]) else {
+            panic!("meter is required");
+        };
+        assert!(refused.message.contains("\"meter\""), "{refused}");
     }
 
     #[test]
