@@ -35,6 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use net::Target;
 use serial::{Framing, SerialTransport};
 use transport::Configured;
 use transport::error::{Result, protocol_error};
@@ -54,7 +55,7 @@ pub const ANSWER_ROOM: usize = MAX_USER_DATA - 12;
 
 /// The rate a meter answers at unless its Location says another: 2400
 /// baud, the one EN 13757-2 meters are delivered speaking.
-pub const BAUD: u32 = 2400;
+const BAUD: u32 = 2400;
 
 /// The master's side of a line.
 #[derive(Clone)]
@@ -255,12 +256,13 @@ impl Transport for MBusTransport {
     /// `target` may name an address, `mbus://line/7`, overriding the
     /// transport's.
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let address = match transport::socket::target("mbus", target) {
-            Some((_, address)) if !address.is_empty() => address
-                .parse()
-                .map_err(|_| protocol_error(format!("{address} is not a primary address")))?,
-            _ => self.address,
-        };
+        let address =
+            match Target::under(&["mbus"], target).map(|named| (named.authority(), named.path())) {
+                Some((_, address)) if !address.is_empty() => address
+                    .parse()
+                    .map_err(|_| protocol_error(format!("{address} is not a primary address")))?,
+                _ => self.address,
+            };
         self.write_stream(address, bytes)
     }
 }

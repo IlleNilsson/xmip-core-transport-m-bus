@@ -13,15 +13,15 @@
 use transport::error::{Result, protocol_error};
 
 /// DIF: the data is variable length, its length in the byte after the VIF.
-pub const VARIABLE_LENGTH: u8 = 0x0d;
+const VARIABLE_LENGTH: u8 = 0x0d;
 /// VIF: the data is manufacturer specific; a Stream is.
-pub const MANUFACTURER_SPECIFIC: u8 = 0x7f;
+const MANUFACTURER_SPECIFIC: u8 = 0x7f;
 /// DIF: more records follow in the next telegram.
 pub const MORE_FOLLOW: u8 = 0x1f;
 /// The most one record holds: the largest length byte that means bytes.
-pub const MAX_RECORD: usize = 0xbf;
+const MAX_RECORD: usize = 0xbf;
 /// A record's DIF, VIF and length byte.
-pub const RECORD_OVERHEAD: usize = 3;
+const RECORD_OVERHEAD: usize = 3;
 
 /// Control information: data sent by the master to the meter, no header.
 pub const CI_DATA_SEND: u8 = 0x51;
@@ -32,7 +32,7 @@ pub const CI_VARIABLE_SHORT: u8 = 0x7a;
 
 /// The least room a telegram needs: one record of one byte, and the
 /// marker that more follow.
-pub const MIN_ROOM: usize = RECORD_OVERHEAD + 2;
+const MIN_ROOM: usize = RECORD_OVERHEAD + 2;
 
 /// `payload` as telegram bodies of at most `room` bytes each, every one
 /// but the last closing with [`MORE_FOLLOW`]. An empty payload is one
