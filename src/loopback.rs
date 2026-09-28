@@ -25,7 +25,7 @@ use crate::record::{CI_DATA_SEND, CI_VARIABLE_LONG};
 use crate::{ANSWER_ROOM, MBusTransport};
 
 /// The primary address of the loopback meter.
-pub const METER: u8 = 1;
+const METER: u8 = 1;
 
 /// A meter as a device on the bus.
 pub struct OnTheBus(pub Arc<Meter>);

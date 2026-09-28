@@ -16,11 +16,11 @@ use transport::error::{Result, protocol_error};
 /// The single-character acknowledgement.
 pub const ACK: u8 = 0xe5;
 /// What a short frame opens with.
-pub const SHORT: u8 = 0x10;
+const SHORT: u8 = 0x10;
 /// What a long frame opens with, twice.
-pub const LONG: u8 = 0x68;
+const LONG: u8 = 0x68;
 /// What every frame but the acknowledgement closes with.
-pub const STOP: u8 = 0x16;
+const STOP: u8 = 0x16;
 /// The most user data a long frame carries: 255 less control, address and
 /// control information.
 pub const MAX_USER_DATA: usize = 252;
@@ -142,7 +142,7 @@ impl Frame {
     ///
     /// # Errors
     /// A first byte that opens no frame.
-    pub fn after_start(first: u8) -> Result<usize> {
+    fn after_start(first: u8) -> Result<usize> {
         match first {
             ACK => Ok(0),
             SHORT => Ok(4),
@@ -154,7 +154,7 @@ impl Frame {
     /// How many bytes follow a long frame's four-byte header: the length,
     /// then the checksum and the stop.
     #[must_use]
-    pub const fn after_long_header(length: u8) -> usize {
+    const fn after_long_header(length: u8) -> usize {
         length as usize + 2
     }
 

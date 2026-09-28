@@ -32,7 +32,7 @@ impl Identity {
     /// The manufacturer as the two bytes of EN 61107: each letter less
     /// sixty-four, in five bits.
     #[must_use]
-    pub fn manufacturer_code(&self) -> u16 {
+    fn manufacturer_code(&self) -> u16 {
         self.manufacturer.iter().fold(0u16, |code, letter| {
             code * 32 + u16::from(letter.saturating_sub(64) & 0x1f)
         })
@@ -40,7 +40,7 @@ impl Identity {
 
     /// The ident as four bytes of packed BCD, least significant first.
     #[must_use]
-    pub fn ident_bcd(&self) -> [u8; 4] {
+    fn ident_bcd(&self) -> [u8; 4] {
         let mut digits = self.ident % 100_000_000;
         let mut out = [0u8; 4];
         for byte in &mut out {
