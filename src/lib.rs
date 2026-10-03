@@ -23,6 +23,11 @@
 //! Wireless M-Bus frames the same records and the same meter over the air
 //! and rides on this crate for them.
 //!
+//! **A receive is a read, `REQ_UD2`, which consumes nothing at the
+//! meter** — it keeps holding the Stream — so the verdict has nothing to
+//! tell it, whichever it is: a cycle that did not complete loses nothing, and
+//! the next read finds the Stream again.
+//!
 //! The origin URI names the line and the meter's address:
 //! `mbus://<line>/<address>`.
 
@@ -40,7 +45,7 @@ use serial::{Framing, SerialTransport};
 use transport::Configured;
 use transport::error::{Result, protocol_error};
 use transport::line::Line;
-use transport::{Arrived, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Directions, Taken, Transport};
 use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 pub use frame::Frame;
@@ -148,12 +153,13 @@ impl MBusTransport {
         Ok(())
     }
 
-    /// Read the Stream the meter holds, a telegram of records at a time.
+    /// Read the Stream the meter holds, whole, a telegram of records at a
+    /// time. The meter keeps holding it.
     ///
     /// # Errors
     /// An answer that is not the meter's data, or records that are no
     /// Stream.
-    pub fn read_stream(&self) -> Result<Arrived> {
+    pub fn read_stream(&self) -> Result<Taken> {
         let mut bytes = Vec::new();
         loop {
             let request = Frame::Short {
@@ -173,7 +179,7 @@ impl MBusTransport {
             };
             bytes.extend_from_slice(&chunk);
             if !more {
-                return Ok(Arrived::new(self.origin(self.address), bytes));
+                return Ok(Taken::new(self.origin(self.address), bytes));
             }
         }
     }
@@ -248,9 +254,21 @@ impl Transport for MBusTransport {
         Directions::BOTH
     }
 
-    /// Read the Stream the meter holds.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("a poll reads again what is not yet told")
+    }
+
+    /// Read the Stream the meter holds, whole. The verdict has nothing to
+    /// tell the meter, whichever it is: `REQ_UD2` consumes nothing — the
+    /// meter keeps holding the Stream — so a cycle that did not complete
+    /// loses nothing, and the next read finds it again.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        Ok(vec![self.read_stream()?])
+        let read = self.read_stream()?;
+        Ok(vec![Arrived::whole(
+            read.origin_uri,
+            read.bytes,
+            Acknowledgement::unconsumed(),
+        )])
     }
 
     /// `target` may name an address, `mbus://line/7`, overriding the
