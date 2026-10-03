@@ -167,6 +167,12 @@ mod tests {
         assert_eq!(arrived.bytes, long);
         loopback.initialise(METER).expect("SND_NKE");
         assert_eq!(loopback.read_stream().expect("still held").bytes, long);
+        // A receive consumes nothing: refused, the next one reads it again.
+        let read = loopback.receive().expect("read").remove(0);
+        assert!(read.defers(), "a read consumes nothing: nothing to lose");
+        read.failed().expect("refused");
+        let again = loopback.receive().expect("again").remove(0);
+        assert_eq!(again.taken().expect("taken").bytes, long);
     }
 
     #[test]
