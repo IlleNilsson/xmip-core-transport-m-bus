@@ -40,6 +40,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use context::property::M_BUS_PRIMARY_ADDRESS;
 use net::Target;
 use serial::{Framing, SerialTransport};
 use transport::Configured;
@@ -179,7 +180,8 @@ impl MBusTransport {
             };
             bytes.extend_from_slice(&chunk);
             if !more {
-                return Ok(Taken::new(self.origin(self.address), bytes));
+                return Ok(Taken::new(self.origin(self.address), bytes)
+                    .observing(M_BUS_PRIMARY_ADDRESS, self.address.to_string()));
             }
         }
     }
@@ -264,11 +266,11 @@ impl Transport for MBusTransport {
     /// loses nothing, and the next read finds it again.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let read = self.read_stream()?;
-        Ok(vec![Arrived::whole(
-            read.origin_uri,
-            read.bytes,
-            Acknowledgement::unconsumed(),
-        )])
+        Ok(vec![
+            Arrived::whole(read.origin_uri, read.bytes, Acknowledgement::unconsumed())
+                .scheduled()
+                .observing_all(read.observed),
+        ])
     }
 
     /// `target` may name an address, `mbus://line/7`, overriding the

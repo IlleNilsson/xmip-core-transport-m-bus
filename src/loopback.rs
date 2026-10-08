@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use sdk::serial::{Bus, Device};
+use transport::ArrivalIdentity;
 use transport::Transport;
 use transport::error::Result;
 use transport::held::Held;
@@ -98,6 +99,10 @@ impl MBusTransport {
 }
 
 impl Loopback for MBusTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Named(&[context::property::M_BUS_PRIMARY_ADDRESS])
+    }
+
     /// The meter on the bus, holding what the master wrote until it is read
     /// back.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
