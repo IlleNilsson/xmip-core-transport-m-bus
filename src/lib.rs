@@ -260,6 +260,10 @@ impl Transport for MBusTransport {
         transport::Arrivals::Ordered("a poll reads again what is not yet told")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Polled("a read of the meter returns at once")
+    }
+
     /// Read the Stream the meter holds, whole. The verdict has nothing to
     /// tell the meter, whichever it is: `REQ_UD2` consumes nothing — the
     /// meter keeps holding the Stream — so a cycle that did not complete
