@@ -202,12 +202,9 @@ mod tests {
         assert!(five.held().is_empty(), "five heard it and kept silent");
 
         let at_five = MBusTransport::new(Arc::clone(&bus) as Arc<dyn Line>, 5);
-        assert!(
-            at_five
-                .read_stream()
-                .expect("five answers")
-                .bytes
-                .is_empty()
+        assert_eq!(
+            at_five.read_stream().expect("five answers").bytes,
+            [] as [u8; 0]
         );
         let at_three = MBusTransport::new(bus as Arc<dyn Line>, 3);
         let read = at_three.read_stream().expect("three answers");

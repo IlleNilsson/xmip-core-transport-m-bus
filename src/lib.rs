@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn m_bus_declares_its_settings_and_reads_through_them() {
         use xcore::settings::Given;
-        assert!(MBusTransport::SETTINGS.problems().is_empty());
+        assert_eq!(MBusTransport::SETTINGS.problems(), [] as [String; 0]);
         let given = [
             ("meter".to_string(), Given::Integer(7)),
             ("timeout".to_string(), Given::Text("2s".to_string())),
