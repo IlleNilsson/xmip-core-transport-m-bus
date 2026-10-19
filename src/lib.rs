@@ -268,7 +268,7 @@ impl Transport for MBusTransport {
     /// tell the meter, whichever it is: `REQ_UD2` consumes nothing — the
     /// meter keeps holding the Stream — so a cycle that did not complete
     /// loses nothing, and the next read finds it again.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let read = self.read_stream()?;
         Ok(vec![
             Arrived::whole(read.origin_uri, read.bytes, Acknowledgement::unconsumed())
@@ -277,9 +277,14 @@ impl Transport for MBusTransport {
         ])
     }
 
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one M-Bus telegram carries the whole body")
+    }
+
     /// `target` may name an address, `mbus://line/7`, overriding the
     /// transport's.
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         let address =
             match Target::under(&["mbus"], target).map(|named| (named.authority(), named.path())) {
                 Some((_, address)) if !address.is_empty() => address
