@@ -170,7 +170,7 @@ mod tests {
             .collect();
         let arrived = loopback.round(&long).expect("sixteen telegrams each way");
         assert_eq!(arrived.bytes, long);
-        loopback.initialise(METER).expect("SND_NKE");
+        loopback.initialize(METER).expect("SND_NKE");
         assert_eq!(loopback.read_stream().expect("still held").bytes, long);
         // A receive consumes nothing: refused, the next one reads it again.
         let read = loopback.receive().expect("read").remove(0);
@@ -190,11 +190,11 @@ mod tests {
             .timing_out_after(Duration::from_millis(10));
 
         assert!(
-            master.initialise(1).expect_err("silence").retryable,
+            master.initialize(1).expect_err("silence").retryable,
             "nobody at 1"
         );
-        master.initialise(3).expect("addressed");
-        master.initialise(5).expect("addressed");
+        master.initialize(3).expect("addressed");
+        master.initialize(5).expect("addressed");
         MBusTransport::new(Arc::clone(&bus) as Arc<dyn Line>, 3)
             .write_stream(3, b"for three")
             .expect("three takes it");
@@ -228,6 +228,6 @@ mod tests {
         assert_eq!(three.held(), b"to all");
         assert_eq!(five.held(), b"to all");
         bus.break_the_line();
-        assert!(master.initialise(3).is_err(), "a break condition");
+        assert!(master.initialize(3).is_err(), "a break condition");
     }
 }

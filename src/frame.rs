@@ -25,7 +25,7 @@ const STOP: u8 = 0x16;
 /// control information.
 pub const MAX_USER_DATA: usize = 252;
 
-/// Initialisation of the slave; answered with an acknowledgement.
+/// Initialization of the slave; answered with an acknowledgement.
 pub const SND_NKE: u8 = 0x40;
 /// User data to the slave; answered with an acknowledgement.
 pub const SND_UD: u8 = 0x53;
