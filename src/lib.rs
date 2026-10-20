@@ -121,11 +121,11 @@ impl MBusTransport {
         }
     }
 
-    /// `SND_NKE`: initialise the meter at `address`.
+    /// `SND_NKE`: initialize the meter at `address`.
     ///
     /// # Errors
     /// No acknowledgement.
-    pub fn initialise(&self, address: u8) -> Result<()> {
+    pub fn initialize(&self, address: u8) -> Result<()> {
         let frame = Frame::Short {
             control: SND_NKE,
             address,
