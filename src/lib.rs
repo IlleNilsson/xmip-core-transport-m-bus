@@ -223,6 +223,9 @@ impl Configured for MBusTransport {
         ],
     };
 
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["mbus"];
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // The declaration holds both integers within their ranges.
         let baud = u32::try_from(settings.integer("baud")).unwrap_or(BAUD);
@@ -285,13 +288,14 @@ impl Transport for MBusTransport {
     /// transport's.
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let bytes: &[u8] = &outgoing.gather()?;
-        let address =
-            match Target::under(&["mbus"], target).map(|named| (named.authority(), named.path())) {
-                Some((_, address)) if !address.is_empty() => address
-                    .parse()
-                    .map_err(|_| protocol_error(format!("{address} is not a primary address")))?,
-                _ => self.address,
-            };
+        let address = match Target::under(Self::SCHEMES, target)
+            .map(|named| (named.authority(), named.path()))
+        {
+            Some((_, address)) if !address.is_empty() => address
+                .parse()
+                .map_err(|_| protocol_error(format!("{address} is not a primary address")))?,
+            _ => self.address,
+        };
         self.write_stream(address, bytes)
     }
 }
