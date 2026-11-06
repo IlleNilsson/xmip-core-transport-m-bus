@@ -9,8 +9,9 @@
 //! is the link layer's business.
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, PoisonError};
+use xcore::lock::Locked;
 
 use transport::error::{Result, protocol_error};
 
@@ -154,23 +155,14 @@ impl Meter {
     /// The Stream the meter holds, as the last complete write left it.
     #[must_use]
     pub fn held(&self) -> Vec<u8> {
-        self.held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.held.locked().clone()
     }
 
     /// Forget a write in progress and a read in progress: what `SND_NKE`
     /// does.
     pub fn reset(&self) {
-        self.arriving
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
-        self.giving
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        self.arriving.locked().clear();
+        self.giving.locked().clear();
     }
 
     /// Take the records of one telegram written to the meter; `true` when
@@ -180,12 +172,12 @@ impl Meter {
     /// Records that are no Stream.
     pub fn take(&self, body: &[u8]) -> Result<bool> {
         let (bytes, more) = record::unpack(body)?;
-        let mut arriving = self.arriving.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut arriving = self.arriving.locked();
         arriving.extend_from_slice(&bytes);
         if more {
             return Ok(false);
         }
-        *self.held.lock().unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut arriving);
+        *self.held.locked() = std::mem::take(&mut arriving);
         Ok(true)
     }
 
@@ -196,7 +188,7 @@ impl Meter {
     /// # Errors
     /// Room too small for a record.
     pub fn give(&self, room: usize) -> Result<Vec<u8>> {
-        let mut giving = self.giving.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut giving = self.giving.locked();
         if giving.is_empty() {
             giving.extend(record::pack(&self.held(), room)?);
         }
