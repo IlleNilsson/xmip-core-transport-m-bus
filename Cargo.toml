@@ -26,7 +26,7 @@ net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson
 # The settings this technology declares (xcore::settings), read through
 # transport::Configured (ADR-0064, amendment 2026-09-26).
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
-# The carrier, declared in architecture.xmip: the line the telegrams go on,
+# The carrier, declared in architecture.toml: the line the telegrams go on,
 # a loopback line in process and a port on a deployment.
 sdk = { package = "xmip-core-sdk", git = "https://github.com/IlleNilsson/xmip-core-sdk", branch = "main" }
 # The serial port a Location's address names, read as M-Bus reads one: by the
