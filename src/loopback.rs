@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use sdk::serial::{Bus, Device};
 use transport::ArrivalIdentity;
+use transport::Configured;
 use transport::Transport;
 use transport::error::Result;
 use transport::held::Held;

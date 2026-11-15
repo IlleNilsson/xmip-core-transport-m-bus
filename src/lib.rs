@@ -73,22 +73,17 @@ pub struct MBusTransport {
 }
 
 impl MBusTransport {
-    /// A master on `line`, talking to the meter at primary `address`.
+    /// A master on `line`, talking to the meter at primary `address`,
+    /// waiting on it as long as a serial port waits on a read
+    /// ([`serial::TIMEOUT`]) until told otherwise.
     #[must_use]
     pub fn new(line: Arc<dyn Line>, address: u8) -> Self {
         Self {
             line,
             address,
-            timeout: Duration::from_secs(1),
+            timeout: serial::TIMEOUT,
             fcb: Arc::new(AtomicBool::new(true)),
         }
-    }
-
-    /// Give up on a meter that does not answer within `timeout`.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
     }
 
     /// `mbus://<line>/<address>`.
@@ -213,30 +208,31 @@ impl Configured for MBusTransport {
                 meaning: "The rate the line runs at, in baud.",
                 applies: Applies::Both,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a meter that does not answer is waited for.",
-                applies: Applies::Both,
-            },
+            // The serial port's own wait, which the master hands each read
+            // of the line.
+            transport::configured::timeout(
+                Applies::Both,
+                Some(serial::TIMEOUT),
+                "How long a meter that does not answer is waited for.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["mbus"];
 
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
+
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // The declaration holds both integers within their ranges.
         let baud = u32::try_from(settings.integer("baud")).unwrap_or(BAUD);
         let meter = u8::try_from(settings.integer("meter")).unwrap_or(0);
+        // Each read of the port waits what the master hands it: the
+        // Location's timeout, which `open` hands the master after this.
         let port = SerialTransport::new(address, baud).framed(Framing::Measured(Frame::measure));
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => {
-                Self::new(Arc::new(port.timing_out_after(timeout)), meter).timing_out_after(timeout)
-            }
-            None => Self::new(Arc::new(port), meter),
-        })
+        Ok(Self::new(Arc::new(port), meter))
     }
 }
 
@@ -304,6 +300,7 @@ impl Transport for MBusTransport {
 mod tests {
     use super::*;
     use transport::loopback::LOOPBACK_TIMEOUT;
+    use xcore::lock::Locked;
 
     /// A serial loopback wire read as M-Bus reads a port: by the length
     /// the frame opens with.
@@ -324,10 +321,60 @@ mod tests {
         assert_eq!(built.address, 7);
         assert_eq!(built.timeout, Duration::from_secs(2));
         assert_eq!(built.origin(7), "mbus:///dev/ttyUSB0/7");
+        // Left out, the meter is waited on as long as the serial port waits
+        // on a read: the default the Location declares.
+        let declared = MBusTransport::SETTINGS;
+        let unsaid = declared.read(Applies::Receive, &given[..1]).expect("read");
+        let timeout = unsaid.optional_duration(transport::configured::TIMEOUT);
+        assert_eq!(timeout, Some(serial::TIMEOUT));
+        let unsaid = MBusTransport::open("COM3", Applies::Receive, &given[..1]).expect("built");
+        assert_eq!(unsaid.timeout, serial::TIMEOUT);
         let Err(refused) = MBusTransport::open("COM3", Applies::Send, &given[1..]) else {
             panic!("meter is required");
         };
         assert!(refused.message.contains("\"meter\""), "{refused}");
+    }
+
+    /// A line that never answers, keeping the wait each read was handed.
+    #[derive(Default)]
+    struct Silent(std::sync::Mutex<Vec<Duration>>);
+
+    impl Line for Silent {
+        fn name(&self) -> String {
+            "silent".to_string()
+        }
+
+        fn transmit(&self, _frame: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        fn receive(&self, timeout: Duration) -> Result<Option<Vec<u8>>> {
+            self.0.locked().push(timeout);
+            Ok(None)
+        }
+    }
+
+    /// A Location's timeout is what the master hands every read of its
+    /// line, which the serial port sets on itself, kept open between the
+    /// master's transmit and its receive.
+    #[test]
+    fn a_configured_timeout_is_what_every_read_of_the_line_waits() {
+        use xcore::settings::Given;
+        let given = [
+            ("meter".to_string(), Given::Integer(7)),
+            ("timeout".to_string(), Given::Text("250ms".to_string())),
+        ];
+        let built = MBusTransport::open("COM3", Applies::Receive, &given).expect("built");
+        // The port the Location names, handed in as a line that never
+        // answers.
+        let silent = Arc::new(Silent::default());
+        let master = MBusTransport {
+            line: Arc::clone(&silent) as Arc<dyn Line>,
+            ..built
+        };
+        let error = master.read_stream().expect_err("no answer");
+        assert!(error.message.contains("did not answer"), "{error}");
+        assert_eq!(*silent.0.locked(), [Duration::from_millis(250)]);
     }
 
     #[test]
