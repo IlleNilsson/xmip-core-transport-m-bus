@@ -32,27 +32,28 @@
 //! `mbus://<line>/<address>`.
 
 pub mod frame;
+mod frame_count;
 pub mod loopback;
 pub mod meter;
 pub mod record;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use context::property::M_BUS_PRIMARY_ADDRESS;
 use net::Target;
 use serial::{Framing, SerialTransport};
-use transport::Configured;
 use transport::error::{Result, protocol_error};
 use transport::line::Line;
-use transport::{Acknowledgement, Arrived, Directions, Taken, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Sharing, Taken, Transport};
+use xcore::lock::Locked;
 use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
 
 pub use frame::Frame;
 pub use meter::{Identity, Meter};
 
 use crate::frame::{FCB, MAX_USER_DATA, REQ_UD2, RSP_UD, SND_NKE, SND_UD};
+use crate::frame_count::FrameCounts;
 use crate::record::{CI_DATA_SEND, CI_VARIABLE_LONG};
 
 /// The room a wired answer leaves for records: a long frame's user data
@@ -69,7 +70,9 @@ pub struct MBusTransport {
     line: Arc<dyn Line>,
     address: u8,
     timeout: Duration,
-    fcb: Arc<AtomicBool>,
+    /// The frame count bit of each meter the line reaches: the port's, on a
+    /// port the node's Locations share (`frame_count.rs`).
+    counts: Arc<FrameCounts>,
 }
 
 impl MBusTransport {
@@ -82,7 +85,7 @@ impl MBusTransport {
             line,
             address,
             timeout: serial::TIMEOUT,
-            fcb: Arc::new(AtomicBool::new(true)),
+            counts: Arc::default(),
         }
     }
 
@@ -92,31 +95,37 @@ impl MBusTransport {
         format!("mbus://{}/{address}", self.line.name())
     }
 
-    /// Send `frame` and take the meter's answer.
+    /// Send `frame` as it is and take the meter's answer: its frame count
+    /// bit is the caller's.
     ///
     /// # Errors
     /// No answer in time, or an answer that is no frame.
     pub fn exchange(&self, frame: &Frame) -> Result<Frame> {
-        self.line.transmit(&frame.encode()?)?;
+        // One exchange on the line, so on a port other Locations share the
+        // meter's answer reaches this master alone.
         let answer = self
             .line
-            .receive(self.timeout)?
+            .exchange(&frame.encode()?, self.timeout)?
             .ok_or_else(|| transport::TransportError::retryable("the meter did not answer"))?;
-        let answer = Frame::decode(&answer)?;
-        self.fcb.fetch_xor(true, Ordering::Relaxed);
+        Frame::decode(&answer)
+    }
+
+    /// The frame `frame` builds on `base`, the control with the frame count
+    /// bit of the meter at `address`, sent and answered: the bit toggled
+    /// once the meter answered, so the next call to the meter, from any
+    /// Location reaching it, carries the other. The meter's bit is held
+    /// across the call (`frame_count.rs`).
+    fn counted(&self, address: u8, base: u8, frame: impl FnOnce(u8) -> Frame) -> Result<Frame> {
+        let meter = self.counts.of(address);
+        let mut bit = meter.locked();
+        let control = if *bit { base | FCB } else { base };
+        let answer = self.exchange(&frame(control))?;
+        *bit = !*bit;
         Ok(answer)
     }
 
-    /// The control field with this call's frame count bit.
-    fn control(&self, base: u8) -> u8 {
-        if self.fcb.load(Ordering::Relaxed) {
-            base | FCB
-        } else {
-            base
-        }
-    }
-
-    /// `SND_NKE`: initialize the meter at `address`.
+    /// `SND_NKE`: initialize the meter at `address`, whose next call then
+    /// carries the frame count bit set.
     ///
     /// # Errors
     /// No acknowledgement.
@@ -125,10 +134,13 @@ impl MBusTransport {
             control: SND_NKE,
             address,
         };
-        self.fcb.store(false, Ordering::Relaxed);
-        acknowledged(&self.exchange(&frame)?)?;
-        self.fcb.store(true, Ordering::Relaxed);
-        Ok(())
+        let meter = self.counts.of(address);
+        let mut bit = meter.locked();
+        *bit = false;
+        let answer = self.exchange(&frame)?;
+        *bit = true;
+        drop(bit);
+        acknowledged(&answer)
     }
 
     /// Write `bytes` to the meter at `address`, a telegram of records at a
@@ -138,13 +150,13 @@ impl MBusTransport {
     /// A telegram not acknowledged.
     pub fn write_stream(&self, address: u8, bytes: &[u8]) -> Result<()> {
         for data in record::pack(bytes, MAX_USER_DATA)? {
-            let frame = Frame::Long {
-                control: self.control(SND_UD),
+            let answer = self.counted(address, SND_UD, |control| Frame::Long {
+                control,
                 address,
                 ci: CI_DATA_SEND,
                 data,
-            };
-            acknowledged(&self.exchange(&frame)?)?;
+            })?;
+            acknowledged(&answer)?;
         }
         Ok(())
     }
@@ -158,11 +170,11 @@ impl MBusTransport {
     pub fn read_stream(&self) -> Result<Taken> {
         let mut bytes = Vec::new();
         loop {
-            let request = Frame::Short {
-                control: self.control(REQ_UD2),
+            let request = |control| Frame::Short {
+                control,
                 address: self.address,
             };
-            let (chunk, more) = match self.exchange(&request)? {
+            let (chunk, more) = match self.counted(self.address, REQ_UD2, request)? {
                 Frame::Long {
                     control,
                     ci: CI_VARIABLE_LONG,
@@ -223,6 +235,20 @@ impl Configured for MBusTransport {
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
+    }
+
+    /// The line on what the Locations of the node share: a serial port
+    /// takes the one port its device has on the node, so every meter on one
+    /// bus is read through it, and the frame count bit of each meter on it
+    /// is kept with the port, under its path, so every Location reaching a
+    /// meter alternates one bit; a line nothing is shared on stays as it
+    /// is, its bits the Location's own.
+    fn shared_by(mut self, sharing: &Arc<dyn Sharing>) -> Self {
+        if let Some(line) = self.line.shared_on(sharing) {
+            self.counts = sharing.one(&line.name(), FrameCounts::default);
+            self.line = line;
+        }
+        self
     }
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
@@ -375,6 +401,133 @@ mod tests {
         let error = master.read_stream().expect_err("no answer");
         assert!(error.message.contains("did not answer"), "{error}");
         assert_eq!(*silent.0.locked(), [Duration::from_millis(250)]);
+    }
+
+    /// Two M-Bus Locations naming one port take its one port from what
+    /// their node shares, so what one master puts on the line the other
+    /// reads off it, where a port of its own reads nothing; a line nothing
+    /// is shared on stays as it is.
+    #[test]
+    fn locations_on_one_port_take_its_one_port_from_their_node() {
+        let node: Arc<dyn Sharing> = Arc::new(transport::Shared::default());
+        let first = MBusTransport::new(Arc::new(port()), 1).shared_by(&node);
+        let second = MBusTransport::new(Arc::new(port()), 2).shared_by(&node);
+        let alone = MBusTransport::new(Arc::new(port()), 3);
+        let ack = Frame::Ack.encode().expect("encode");
+        first.line.transmit(&ack).expect("transmit");
+        let read = alone.line.receive(LOOPBACK_TIMEOUT).expect("quiet");
+        assert_eq!(read, None, "a port of its own");
+        let read = second.line.receive(LOOPBACK_TIMEOUT).expect("read");
+        assert_eq!(read, Some(ack), "one port for both");
+        let silent = MBusTransport::new(Arc::new(Silent::default()), 4).shared_by(&node);
+        assert_eq!(silent.line.name(), "silent");
+    }
+
+    /// A port the Locations of a node share, with meters on it: each frame
+    /// put on it is answered at once by the meter it is for, and the
+    /// frame's address and control are kept.
+    #[derive(Clone)]
+    struct Metered(Arc<Meters>);
+
+    /// The meters on a [`Metered`] port, and each frame's address and
+    /// control, in order.
+    struct Meters {
+        on: Vec<loopback::OnTheBus>,
+        heard: std::sync::Mutex<Vec<(u8, u8)>>,
+    }
+
+    impl Metered {
+        /// Meters at `addresses`, holding nothing.
+        fn with(addresses: &[u8]) -> Self {
+            let meter = |address: u8| {
+                let identity = Identity {
+                    ident: u32::from(address),
+                    manufacturer: *b"XMP",
+                    version: 1,
+                    medium: 7,
+                };
+                loopback::OnTheBus(Arc::new(Meter::new(identity).at_primary(address)))
+            };
+            Self(Arc::new(Meters {
+                on: addresses.iter().copied().map(meter).collect(),
+                heard: std::sync::Mutex::default(),
+            }))
+        }
+
+        /// Each call's address, and whether its frame count bit was set.
+        fn bits(&self) -> Vec<(u8, bool)> {
+            let heard = self.0.heard.locked();
+            heard
+                .iter()
+                .map(|&(at, control)| (at, control & FCB != 0))
+                .collect()
+        }
+    }
+
+    impl Line for Metered {
+        fn name(&self) -> String {
+            "COM7".to_string()
+        }
+
+        fn transmit(&self, _frame: &[u8]) -> Result<()> {
+            Err(protocol_error("a master exchanges"))
+        }
+
+        fn receive(&self, _timeout: Duration) -> Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        fn exchange(&self, frame: &[u8], _timeout: Duration) -> Result<Option<Vec<u8>>> {
+            let frame = Frame::decode(frame)?;
+            if let Frame::Short { control, address }
+            | Frame::Long {
+                control, address, ..
+            } = &frame
+            {
+                self.0.heard.locked().push((*address, *control));
+            }
+            for meter in &self.0.on {
+                if let Some(answer) = meter.answer(&frame)? {
+                    return answer.encode().map(Some);
+                }
+            }
+            Ok(None)
+        }
+
+        fn shared_on(&self, _sharing: &Arc<dyn Sharing>) -> Option<Arc<dyn Line>> {
+            Some(Arc::new(self.clone()))
+        }
+    }
+
+    /// Two Locations reaching one meter on a port their node shares
+    /// alternate one frame count bit, the meter's (EN 13757-2), kept with
+    /// the port by its path; a Location on another meter there alternates
+    /// that meter's; and a reset of the meter (`SND_NKE`) by one sets the
+    /// bit of the next call to it, the other's. Until 2026-11-15 each
+    /// Location kept a bit of its own, and the second call to the meter
+    /// carried the first's bit again.
+    #[test]
+    fn two_locations_on_one_meter_alternate_one_frame_count_bit() {
+        let node: Arc<dyn Sharing> = Arc::new(transport::Shared::default());
+        let port = Metered::with(&[1, 2]);
+        let on = |meter| MBusTransport::new(Arc::new(port.clone()), meter).shared_by(&node);
+        let (first, second, other) = (on(1), on(1), on(2));
+        for master in [&first, &second, &other, &first, &other, &second] {
+            master.read_stream().expect("read");
+        }
+        second.initialize(1).expect("reset");
+        first.read_stream().expect("read");
+        let bits = [
+            (1, true),
+            (1, false),
+            (2, true),
+            (1, true),
+            (2, false),
+            (1, false),
+            (1, false),
+            (1, true),
+        ];
+        assert_eq!(port.bits(), bits);
     }
 
     #[test]
