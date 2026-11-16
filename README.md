@@ -14,6 +14,25 @@ comes before the receive is read; every receive waits the Location's `timeout`,
 that sends nothing in that time did not answer. A write to the port waits the
 port's own 5 s.
 
+Every M-Bus Location on a node naming one port reads its meter through that
+port's one handle (ADR-0064, amendment 2026-11-15): the master hands what the
+node's Locations share on to its line (`Configured::shared_by`,
+`Line::shared_on`), so several meters on one multi-drop bus, each its own
+Location, are all read, where until 2026-11-15 every Location but the first
+was refused the port. Each telegram and its answer are one exchange on the
+line (`Line::exchange`), the port held across both, so a meter's answer
+reaches only the master that asked; each exchange runs at its own Location's
+`baud`.
+
+The frame count bit (EN 13757-2) is the meter's, by its primary address: on a
+node it is kept with the port, under its path in what the node's Locations
+share, so every Location reaching a meter alternates one bit (the owner,
+2026-11-15). It is held across each call, toggled once the meter answered, and
+set for the meter's next call by its reset (`SND_NKE`). On a line nothing is
+shared on, the bits are the Location's own. Until 2026-11-15 each Location kept
+one bit for every meter it called, so two Locations on one meter toggled it
+apart and the meter took the second's telegram for a repeat of the first's.
+
 ## Acknowledgement
 
 A receive is a read, `REQ_UD2` answered by `RSP_UD`, which consumes nothing
