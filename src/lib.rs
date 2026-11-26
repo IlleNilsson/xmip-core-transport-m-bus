@@ -30,41 +30,68 @@
 //!
 //! The origin URI names the line and the meter's address:
 //! `mbus://<line>/<address>`.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod frame;
+#[cfg(feature = "default")]
 mod frame_count;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod meter;
+#[cfg(feature = "default")]
 pub mod record;
 
+#[cfg(feature = "default")]
 use std::sync::Arc;
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 use context::property::M_BUS_PRIMARY_ADDRESS;
+#[cfg(feature = "default")]
+use declaration::BAUD;
+#[cfg(feature = "default")]
 use net::Target;
+#[cfg(feature = "default")]
 use serial::{Framing, SerialTransport};
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
+#[cfg(feature = "default")]
 use transport::line::Line;
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Sharing, Taken, Transport};
+#[cfg(feature = "default")]
 use xcore::lock::Locked;
-use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
+#[cfg(feature = "default")]
 pub use frame::Frame;
+#[cfg(feature = "default")]
 pub use meter::{Identity, Meter};
 
+#[cfg(feature = "default")]
 use crate::frame::{FCB, MAX_USER_DATA, REQ_UD2, RSP_UD, SND_NKE, SND_UD};
+#[cfg(feature = "default")]
 use crate::frame_count::FrameCounts;
+#[cfg(feature = "default")]
 use crate::record::{CI_DATA_SEND, CI_VARIABLE_LONG};
 
 /// The room a wired answer leaves for records: a long frame's user data
 /// less the long header.
+#[cfg(feature = "default")]
 pub const ANSWER_ROOM: usize = MAX_USER_DATA - 12;
 
-/// The rate a meter answers at unless its Location says another: 2400
-/// baud, the one EN 13757-2 meters are delivered speaking.
-const BAUD: u32 = 2400;
-
 /// The master's side of a line.
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct MBusTransport {
     line: Arc<dyn Line>,
@@ -75,16 +102,17 @@ pub struct MBusTransport {
     counts: Arc<FrameCounts>,
 }
 
+#[cfg(feature = "default")]
 impl MBusTransport {
     /// A master on `line`, talking to the meter at primary `address`,
     /// waiting on it as long as a serial port waits on a read
-    /// ([`serial::TIMEOUT`]) until told otherwise.
+    /// ([`serial::declaration::TIMEOUT`]) until told otherwise.
     #[must_use]
     pub fn new(line: Arc<dyn Line>, address: u8) -> Self {
         Self {
             line,
             address,
-            timeout: serial::TIMEOUT,
+            timeout: serial::declaration::TIMEOUT,
             counts: Arc::default(),
         }
     }
@@ -194,44 +222,10 @@ impl MBusTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for MBusTransport {
-    /// The address is the serial port the line is on, `/dev/ttyUSB0` or
-    /// `COM3`; the settings are the meter on it and the line's rate.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "meter",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 250,
-                },
-                presence: Presence::Required,
-                meaning: "The meter's primary address, written to unless a target names one.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "baud",
-                kind: Kind::Integer {
-                    minimum: 300,
-                    maximum: 38_400,
-                },
-                presence: Presence::Default(Fixed::Integer(BAUD as i64)),
-                meaning: "The rate the line runs at, in baud.",
-                applies: Applies::Both,
-            },
-            // The serial port's own wait, which the master hands each read
-            // of the line.
-            transport::configured::timeout(
-                Applies::Both,
-                Some(serial::TIMEOUT),
-                "How long a meter that does not answer is waited for.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["mbus"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
@@ -262,6 +256,7 @@ impl Configured for MBusTransport {
     }
 }
 
+#[cfg(feature = "default")]
 fn acknowledged(answer: &Frame) -> Result<()> {
     if *answer == Frame::Ack {
         Ok(())
@@ -272,6 +267,7 @@ fn acknowledged(answer: &Frame) -> Result<()> {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for MBusTransport {
     fn name(&self) -> &'static str {
         "m-bus"
@@ -327,6 +323,7 @@ mod tests {
     use super::*;
     use transport::loopback::LOOPBACK_TIMEOUT;
     use xcore::lock::Locked;
+    use xcore::settings::Applies;
 
     /// A serial loopback wire read as M-Bus reads a port: by the length
     /// the frame opens with.
@@ -352,9 +349,9 @@ mod tests {
         let declared = MBusTransport::SETTINGS;
         let unsaid = declared.read(Applies::Receive, &given[..1]).expect("read");
         let timeout = unsaid.optional_duration(transport::configured::TIMEOUT);
-        assert_eq!(timeout, Some(serial::TIMEOUT));
+        assert_eq!(timeout, Some(serial::declaration::TIMEOUT));
         let unsaid = MBusTransport::open("COM3", Applies::Receive, &given[..1]).expect("built");
-        assert_eq!(unsaid.timeout, serial::TIMEOUT);
+        assert_eq!(unsaid.timeout, serial::declaration::TIMEOUT);
         let Err(refused) = MBusTransport::open("COM3", Applies::Send, &given[1..]) else {
             panic!("meter is required");
         };
