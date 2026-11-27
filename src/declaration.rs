@@ -1,10 +1,8 @@
-//! What a Location of this technology is configured with: its declaration,
-//! which `Configured` reads, built with the crate's `declaration` feature
-//! alone and the code behind the default (ADR-0064, amendments 2026-10-22
-//! and 2026-11-26), for the library the surfaces load to carry (open
-//! problem 48). The rate a Location takes unless told otherwise is declared
-//! here, and the code takes it from here; the wait is the serial port's,
-//! taken by the serial technology's own `declaration` feature.
+//! This technology's declaration: the transport guide's "The declaration",
+//! `module/core/capability/transport/doc/adding-a-transport.md`. The rate a
+//! Location takes unless told otherwise is declared here, and the code takes
+//! it from here; the wait is the serial port's, taken by the serial
+//! technology's own `declaration` feature.
 
 use xcore::settings::{Applies, Fixed, Kind, Presence, Setting, Settings};
 
@@ -48,5 +46,6 @@ pub const SETTINGS: &Settings = &Settings {
     ],
 };
 
-/// The schemes a Location's address is entered with to choose this technology.
+/// This technology's schemes, as [`transport::Configured::SCHEMES`] defines
+/// them.
 pub const SCHEMES: &[&str] = &["mbus"];
